@@ -130,6 +130,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use std::future::ready;
 use axum_core::{
     extract::{FromRequestParts, Request},
     response::Response,
@@ -355,16 +356,18 @@ where
 {
     type Rejection = (StatusCode, &'static str);
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts
-            .extensions
-            .get::<Messages>()
-            .cloned()
-            .ok_or((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not extract messages. Is `MessagesManagerLayer` installed?",
-            ))
-            .map(Messages::load)
+    fn from_request_parts(parts: &mut Parts, _state: &S) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        ready(
+            parts
+                .extensions
+                .get::<Messages>()
+                .cloned()
+                .ok_or((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Could not extract messages. Is `MessagesManagerLayer` installed?",
+                ))
+                .map(Messages::load),
+        )
     }
 }
 
