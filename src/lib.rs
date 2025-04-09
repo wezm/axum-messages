@@ -259,9 +259,12 @@ impl Messages {
             });
         }
 
-        if !self.is_modified() {
-            self.is_modified.store(true, atomic::Ordering::Release);
-        }
+        let _ = self.is_modified.compare_exchange(
+            false,
+            true,
+            atomic::Ordering::Release,
+            atomic::Ordering::Relaxed,
+        );
 
         self
     }
@@ -303,8 +306,13 @@ impl Iterator for Messages {
     fn next(&mut self) -> Option<Self::Item> {
         let mut data = self.data.lock().unwrap();
         let message = data.messages.pop_front();
-        if message.is_some() && !self.is_modified() {
-            self.is_modified.store(true, atomic::Ordering::Release);
+        if message.is_some() {
+            let _ = self.is_modified.compare_exchange(
+                false,
+                true,
+                atomic::Ordering::Release,
+                atomic::Ordering::Relaxed,
+            );
         }
         message
     }
