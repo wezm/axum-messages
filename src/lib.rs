@@ -118,10 +118,10 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-use core::fmt;
+use std::fmt;
 use std::{
-    collections::{HashMap, VecDeque},
-    future::Future,
+    collections::VecDeque,
+    future::{ready, Future},
     pin::Pin,
     sync::{
         atomic::{self, AtomicBool},
@@ -130,21 +130,17 @@ use std::{
     task::{Context, Poll},
 };
 
-use std::future::ready;
 use axum_core::{
     extract::{FromRequestParts, Request},
     response::Response,
 };
-use http::{request::Parts, StatusCode};
+use http::request::Parts;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tower::{Layer, Service};
 use tower_sessions_core::{session, Session};
 
 // N.B.: Code structure directly borrowed from `axum-flash`: https://github.com/davidpdrsn/axum-flash/blob/5e8b2bded97fd10bb275d5bc66f4d020dec465b9/src/lib.rs
-
-/// Mapping of key-value pairs which provide additional context to the message.
-pub type Metadata = HashMap<String, serde_json::Value>;
 
 /// Container for a message which provides a level and message content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,10 +152,6 @@ pub struct Message {
     /// The message itself.
     #[serde(rename = "m")]
     pub message: String,
-
-    /// Additional context related to the message.
-    #[serde(rename = "d")]
-    pub metadata: Option<Metadata>,
 }
 
 impl fmt::Display for Message {
@@ -172,7 +164,7 @@ type MessageQueue = VecDeque<Message>;
 
 /// Enumeration of message levels.
 ///
-/// This folllows directly from the [Django
+/// This follows directly from the [Django
 /// implementation][django-message-levels].
 ///
 /// [django-message-levels]: https://docs.djangoproject.com/en/5.0/ref/contrib/messages/#message-levels
@@ -235,67 +227,36 @@ impl Messages {
 
     /// Push a `Debug` message.
     pub fn debug(self, message: impl Into<String>) -> Self {
-        self.push(Level::Debug, message, None)
+        self.push(Level::Debug, message)
     }
 
     /// Push an `Info` message.
     pub fn info(self, message: impl Into<String>) -> Self {
-        self.push(Level::Info, message, None)
+        self.push(Level::Info, message)
     }
 
     /// Push a `Success` message.
     pub fn success(self, message: impl Into<String>) -> Self {
-        self.push(Level::Success, message, None)
+        self.push(Level::Success, message)
     }
 
     /// Push a `Warning` message.
     pub fn warning(self, message: impl Into<String>) -> Self {
-        self.push(Level::Warning, message, None)
+        self.push(Level::Warning, message)
     }
 
     /// Push an `Error` message.
     pub fn error(self, message: impl Into<String>) -> Self {
-        self.push(Level::Error, message, None)
-    }
-
-    /// Push a `Debug` message with metadata.
-    pub fn debug_with_metadata(self, message: impl Into<String>, metadata: Metadata) -> Self {
-        self.push(Level::Debug, message, Some(metadata))
-    }
-
-    /// Push an `Info` message with metadata.
-    pub fn info_with_metadata(self, message: impl Into<String>, metadata: Metadata) -> Self {
-        self.push(Level::Info, message, Some(metadata))
-    }
-
-    /// Push a `Success` message with metadata.
-    pub fn success_with_metadata(self, message: impl Into<String>, metadata: Metadata) -> Self {
-        self.push(Level::Success, message, Some(metadata))
-    }
-
-    /// Push a `Warning` message with metadata.
-    pub fn warning_with_metadata(self, message: impl Into<String>, metadata: Metadata) -> Self {
-        self.push(Level::Warning, message, Some(metadata))
-    }
-
-    /// Push an `Error` message with metadata.
-    pub fn error_with_metadata(self, message: impl Into<String>, metadata: Metadata) -> Self {
-        self.push(Level::Error, message, Some(metadata))
+        self.push(Level::Error, message)
     }
 
     /// Push a message with the given level.
-    pub fn push(
-        self,
-        level: Level,
-        message: impl Into<String>,
-        metadata: Option<Metadata>,
-    ) -> Self {
+    pub fn push(self, level: Level, message: impl Into<String>) -> Self {
         {
             let mut data = self.data.lock();
             data.pending_messages.push_back(Message {
                 message: message.into(),
                 level,
-                metadata,
             });
         }
 
@@ -354,16 +315,19 @@ impl<S> FromRequestParts<S> for Messages
 where
     S: Send + Sync,
 {
-    type Rejection = (StatusCode, &'static str);
+    type Rejection = (http::StatusCode, &'static str);
 
-    fn from_request_parts(parts: &mut Parts, _state: &S) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         ready(
             parts
                 .extensions
                 .get::<Messages>()
                 .cloned()
                 .ok_or((
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
                     "Could not extract messages. Is `MessagesManagerLayer` installed?",
                 ))
                 .map(Messages::load),
@@ -371,7 +335,7 @@ where
     }
 }
 
-/// MIddleware provider `Messages` as a request extension.
+/// Middleware provider `Messages` as a request extension.
 #[derive(Debug, Clone)]
 pub struct MessagesManager<S> {
     inner: S,
@@ -404,7 +368,7 @@ where
 
         Box::pin(async move {
             let Some(session) = req.extensions().get::<Session>().cloned() else {
-                tracing::error!(
+                log::error!(
                     "session not found in request extensions; do tower-sessions versions match?"
                 );
                 let mut res = Response::default();
@@ -416,7 +380,7 @@ where
                 Ok(Some(data)) => data,
                 Ok(None) => Data::default(),
                 Err(err) => {
-                    tracing::error!(err = %err, "could not load messages data");
+                    log::error!("could not load messages data: {err}");
                     let mut res = Response::default();
                     *res.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
                     return Ok(res);
@@ -430,7 +394,7 @@ where
 
             if messages.is_modified() {
                 if let Err(err) = messages.save().await {
-                    tracing::error!(err = %err, "could not save messages data");
+                    log::error!("could not save messages data: {err}");
                     let mut res = Response::default();
                     *res.status_mut() = http::StatusCode::INTERNAL_SERVER_ERROR;
                     return Ok(res);
@@ -479,18 +443,15 @@ mod tests {
         async fn root(messages: Messages) -> impl IntoResponse {
             messages
                 .into_iter()
-                .map(|message| format!("{}: {} {:?}", message.level, message, message.metadata))
+                .map(|message| format!("{}: {}", message.level, message))
                 .collect::<Vec<_>>()
                 .join(", ")
         }
 
         #[axum::debug_handler]
         async fn set_message(messages: Messages) -> impl IntoResponse {
-            let mut metadata = Metadata::default();
-            metadata.insert("foo".to_string(), "bar".into());
-
             messages
-                .debug_with_metadata("Hello, world!", metadata)
+                .debug("Hello, world!")
                 .info("This is an info message.");
             Redirect::to("/")
         }
@@ -512,10 +473,6 @@ mod tests {
 
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let body = String::from_utf8(bytes.to_vec()).unwrap();
-        assert_eq!(
-            body,
-            "Debug: Hello, world! Some({\"foo\": String(\"bar\")}), Info: This is an info \
-             message. None"
-        );
+        assert_eq!(body, "Debug: Hello, world!, Info: This is an info message.");
     }
 }
