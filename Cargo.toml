@@ -4,12 +4,12 @@ version = "0.8.0"
 edition = "2021"
 authors = ["Max Countryman <hello@maxcountryman.com>"]
 categories = ["asynchronous", "network-programming", "web-programming"]
-description = "🛎️ One-time notification messages for Axum."
-homepage = "https://github.com/maxcountryman/axum-messages"
+description = "Flash messages for Axum"
+homepage = "https://github.com/wezm/axum-messages"
 keywords = ["axum", "flash", "message", "messages", "notification"]
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/maxcountryman/axum-messages"
+repository = "https://github.com/wezm/axum-messages"
 
 [dependencies]
 axum-core = "0.5.0"
