@@ -125,7 +125,7 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{self, AtomicBool},
-        Arc,
+        Arc, Mutex,
     },
     task::{Context, Poll},
 };
@@ -135,7 +135,6 @@ use axum_core::{
     response::Response,
 };
 use http::request::Parts;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tower::{Layer, Service};
 use tower_sessions_core::{session, Session};
@@ -253,7 +252,7 @@ impl Messages {
     /// Push a message with the given level.
     pub fn push(self, level: Level, message: impl Into<String>) -> Self {
         {
-            let mut data = self.data.lock();
+            let mut data = self.data.lock().unwrap();
             data.pending_messages.push_back(Message {
                 message: message.into(),
                 level,
@@ -269,12 +268,12 @@ impl Messages {
 
     /// Returns the number of messages to be read.
     pub fn len(&self) -> usize {
-        self.data.lock().messages.len()
+        self.data.lock().unwrap().messages.len()
     }
 
     /// Returns `true` if there are no messages.
     pub fn is_empty(&self) -> bool {
-        self.data.lock().messages.is_empty()
+        self.data.lock().unwrap().messages.is_empty()
     }
 
     async fn save(self) -> Result<Self, session::Error> {
@@ -287,7 +286,7 @@ impl Messages {
     fn load(self) -> Self {
         {
             // Load messages by taking them from the pending queue.
-            let mut data = self.data.lock();
+            let mut data = self.data.lock().unwrap();
             data.messages = std::mem::take(&mut data.pending_messages);
         }
         self
@@ -302,7 +301,7 @@ impl Iterator for Messages {
     type Item = Message;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut data = self.data.lock();
+        let mut data = self.data.lock().unwrap();
         let message = data.messages.pop_front();
         if message.is_some() && !self.is_modified() {
             self.is_modified.store(true, atomic::Ordering::Release);
